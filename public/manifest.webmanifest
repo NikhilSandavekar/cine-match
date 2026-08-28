@@ -1,6 +1,6 @@
 {
-  "name": "CineMatch",
-  "short_name": "CineMatch",
+  "name": "Movie-Swipe-Dude",
+  "short_name": "Movie Swipe",
   "description": "Swipe global movies, series and anime together.",
   "display": "standalone",
   "start_url": "/",
