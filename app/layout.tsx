@@ -13,11 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'CineMatch — Find your next great watch',
+  title: 'Movie-Swipe-Dude — Find your next great watch',
   description: 'Swipe global movies, series and anime with India streaming availability.',
   manifest: '/manifest.webmanifest',
-  applicationName: 'CineMatch',
-  appleWebApp: { capable: true, title: 'CineMatch', statusBarStyle: 'default' },
+  applicationName: 'Movie-Swipe-Dude',
+  appleWebApp: { capable: true, title: 'Movie-Swipe-Dude', statusBarStyle: 'default' },
 };
 
 export default function RootLayout({
