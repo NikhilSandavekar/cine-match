@@ -1,0 +1,10 @@
+{
+  "name": "CineMatch",
+  "short_name": "CineMatch",
+  "description": "Swipe global movies, series and anime together.",
+  "display": "standalone",
+  "start_url": "/",
+  "background_color": "#fffaf0",
+  "theme_color": "#ffca28"
+}
+
