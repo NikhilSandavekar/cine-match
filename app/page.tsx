@@ -42,7 +42,7 @@ export default function Home() {
   const [liked, setLiked] = useState<Title[]>([]);
   const [trailerOpen, setTrailerOpen] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null); const [seenTitles, setSeenTitles] = useState<string[]>([]);
-  const [roomId, setRoomId] = useState<string | null>(null); const [email, setEmail] = useState(''); const [accountNote, setAccountNote] = useState('');
+  const [roomId, setRoomId] = useState<string | null>(null); const [email, setEmail] = useState(''); const [accountNote, setAccountNote] = useState(''); const [roomNote, setRoomNote] = useState('');
   const [pendingRoomAction, setPendingRoomAction] = useState<'create' | 'join' | null>(null);
   const [emailCooldown, setEmailCooldown] = useState(false);
   const t = copy[language];
@@ -85,20 +85,28 @@ export default function Home() {
   const createRoom = async () => {
     const newCode = `CINE-${Math.floor(1000 + Math.random() * 9000)}`;
     if (supabase && user) {
-      const { data, error } = await supabase.from('rooms').insert({ code: newCode, created_by: user.id }).select('id').single();
-      if (error || !data) { setAccountNote(error?.message ?? 'Could not create the room. Please try again.'); return; }
-      await supabase.from('room_members').insert({ room_id: data.id, user_id: user.id });
-      setRoomId(data.id);
-    } else if (supabaseConfigured) { rememberRoomAction('create'); setAccountNote('Sign in once, then we’ll create your room automatically.'); setSettingsOpen(true); return; }
+      setRoomNote('Creating your room…');
+      // We generate the ID in the browser so the room owner can join it immediately
+      // without needing a read policy before the membership row exists.
+      const newRoomId = crypto.randomUUID();
+      const { error: roomError } = await supabase.from('rooms').insert({ id: newRoomId, code: newCode, created_by: user.id });
+      if (roomError) { setRoomNote(roomError.message); return; }
+      const { error: memberError } = await supabase.from('room_members').insert({ room_id: newRoomId, user_id: user.id });
+      if (memberError) { setRoomNote(memberError.message); return; }
+      setRoomId(newRoomId);
+      setRoomNote('');
+    } else if (supabaseConfigured) { rememberRoomAction('create'); setAccountNote('Sign in once, then we’ll create your room automatically.'); setRoomNote('Sign in from Settings first to create a live room.'); setSettingsOpen(true); return; }
     setRoom(newCode); setRole('host'); setScreen('filters');
   };
   const joinRoom = async () => {
-    if (!room.trim()) return;
+    if (!room.trim()) { setRoomNote('Enter the room code your friend shared.'); return; }
     if (supabase && user) {
+      setRoomNote('Joining room…');
       const { data, error } = await supabase.rpc('join_room_by_code', { room_code: room });
-      if (error || !data) { setAccountNote(error?.message ?? 'Room not found.'); return; }
+      if (error || !data) { setRoomNote(error?.message ?? 'Room not found. Ask your friend to check the code.'); return; }
       setRoomId(data);
-    } else if (supabaseConfigured) { rememberRoomAction('join'); setAccountNote('Sign in once, then we’ll join this room automatically.'); setSettingsOpen(true); return; }
+      setRoomNote('');
+    } else if (supabaseConfigured) { rememberRoomAction('join'); setAccountNote('Sign in once, then we’ll join this room automatically.'); setRoomNote('Sign in from Settings first to join a live room.'); setSettingsOpen(true); return; }
     setRole('guest'); setScreen('filters');
   };
   const swipe = (action: 'liked' | 'disliked' | 'watched') => {
@@ -124,7 +132,7 @@ export default function Home() {
 
   return <main className="mobile-app" lang={language}>
     <header className="app-header"><div className="brand"><span>♥</span> movie-swipe-dude</div>{screen === 'swipe' && <button className="room-chip" onClick={invite}>⌁ {room}</button>}<button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label={t.settings}>⚙</button></header>
-    {screen === 'room' && <section className="onboarding"><div className="orb orb-one" /><div className="orb orb-two" /><p className="tiny-label">{t.room}</p><h1>{t.next}<br /><i>{t.room}</i></h1><p>{t.roomPrompt}</p><div className="room-actions"><button className="primary-button" onClick={createRoom}>✦ {t.create}</button><div className="join-box"><label>{t.join}</label><div><input value={room} placeholder={t.roomInput} onChange={(event) => setRoom(event.target.value.toUpperCase())} /><button onClick={joinRoom}>{t.continue} →</button></div></div></div><small>Mobile-first · Global picks · India streaming</small></section>}
+    {screen === 'room' && <section className="onboarding"><div className="orb orb-one" /><div className="orb orb-two" /><p className="tiny-label">{t.room}</p><h1>{t.next}<br /><i>{t.room}</i></h1><p>{t.roomPrompt}</p><div className="room-actions"><button className="primary-button" onClick={createRoom}>✦ {t.create}</button><div className="join-box"><label>{t.join}</label><div><input value={room} placeholder={t.roomInput} onChange={(event) => { setRoom(event.target.value.toUpperCase()); setRoomNote(''); }} /><button onClick={joinRoom}>{t.continue} →</button></div></div>{roomNote && <p className="room-note" role="status">{roomNote}</p>}</div><small>Mobile-first · Global picks · India streaming</small></section>}
     {screen === 'filters' && <section className="filters-screen"><div className="stepper"><span className="active" /> <span className="active" /> <span /></div><p className="tiny-label">{role === 'host' ? t.host : t.guest} · {room}</p><h1>{t.filters}</h1><p className="lead">{t.filtersSub}</p><FilterSection title={t.where}><div className="choice-row"><Choice active={selectedRegions.includes('Global')} label={t.global} onClick={() => toggle('Global', selectedRegions, setSelectedRegions)} /><Choice active={selectedRegions.includes('India')} label={t.india} onClick={() => toggle('India', selectedRegions, setSelectedRegions)} /></div></FilterSection><FilterSection title={t.category}><div className="choice-row">{(['Movies', 'Series', 'Anime'] as Category[]).map((category) => <Choice key={category} active={selectedCategories.includes(category)} label={language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[category]) : category} onClick={() => toggle(category, selectedCategories, setSelectedCategories)} />)}</div></FilterSection><FilterSection title={t.genres}><button className={`all-genres ${selectedGenres.length === allGenres.length ? 'active' : ''}`} onClick={setAllGenres}>{t.all}</button><div className="genre-grid">{allGenres.map((genre) => <button key={genre} className={selectedGenres.includes(genre) ? 'selected' : ''} onClick={() => toggle(genre, selectedGenres, setSelectedGenres, 0)}>{language === 'hi' ? genreHi[genre] : genre}</button>)}</div></FilterSection>{seenTitles.length > 0 && <p className="history-note">✓ {seenTitles.length} already seen, passed, or liked titles are excluded.</p>}<button className="primary-button wide" disabled={!queue.length} onClick={() => setScreen('swipe')}>♥ {t.start} <span>({queue.length})</span></button></section>}
     {screen === 'swipe' && (current ? <section className="swipe-screen"><div className="swipe-top"><div><p className="tiny-label">{current.region === 'India' ? t.india : t.global} · {language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[current.category]) : current.category}</p><h1>{current.title}</h1></div><div className="rating">★<strong>{current.rating}</strong><small>IMDb</small></div></div><article className="movie-card"><div className="cover" style={current.poster ? { backgroundImage: `linear-gradient(180deg, transparent 48%, rgba(0,0,0,.76)), url(${current.poster})` } : undefined}><div className="cover-fallback">{current.title}</div><div className="cover-bottom"><span>{current.year}</span><button onClick={() => setTrailerOpen(true)}>▶ {t.trailer}</button></div></div><div className="movie-details"><div className="genre-tags">{current.genre.map((genre) => <span key={genre}>{language === 'hi' ? genreHi[genre] : genre}</span>)}</div><p>{language === 'hi' ? current.descriptionHi : current.description}</p><div className="services"><small>{t.watch.toUpperCase()}</small>{current.services.map((service) => <b key={service}>{service}</b>)}</div></div></article><button className="watched-button" onClick={() => swipe('watched')}>◉ Already watched</button><div className="swipe-actions"><button className="pass" onClick={() => swipe('disliked')} aria-label={t.skip}>×</button><button className="heart" onClick={() => swipe('liked')} aria-label={t.like}>♥</button></div><p className="swipe-instruction">{t.skip} ← &nbsp;·&nbsp; {t.like} →</p>{liked.length > 0 && <div className="match-strip">♥ {liked.length} {language === 'hi' ? 'पसंद सेव हुई' : 'picks saved in this room'}</div>}</section> : <section className="empty-deck"><p className="tiny-label">Movie-Swipe-Dude</p><h1>You’re all caught up.</h1><p>Every title in this filter has already been seen, passed, or liked.</p><button className="primary-button" onClick={() => setScreen('filters')}>Change filters</button></section>)}
     {settingsOpen && <div className="sheet-backdrop" role="dialog" aria-modal="true"><section className="settings-sheet"><div className="handle" /><div className="sheet-title"><h2>{t.settings}</h2><button onClick={() => setSettingsOpen(false)}>×</button></div><p>{t.language}</p><div className="language-toggle"><button className={language === 'en' ? 'selected' : ''} onClick={() => setLanguage('en')}>English</button><button className={language === 'hi' ? 'selected' : ''} onClick={() => setLanguage('hi')}>हिन्दी</button></div><div className="account-panel"><p className="account-title">Your account</p>{user ? <><strong>{user.email ?? 'Signed in'}</strong><small>Likes, passes, and watched picks stay off your next deck.</small><button className="signout-button" onClick={() => supabase?.auth.signOut()}>Sign out</button></> : <>{supabaseConfigured ? <><small>Use an email link to save your tastes and use live rooms with friends.</small><div className="email-login"><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button disabled={emailCooldown} onClick={sendMagicLink}>{emailCooldown ? 'Link sent' : 'Send link'}</button></div></> : <small>Account connection is being set up. Your swipes are saved privately on this device for now.</small>}</>}{accountNote && <small className="account-note">{accountNote}</small>}</div><button className="invite-button" onClick={invite}>⌁ {t.invite}</button></section></div>}
