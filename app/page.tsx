@@ -43,6 +43,7 @@ export default function Home() {
   const [trailerOpen, setTrailerOpen] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null); const [seenTitles, setSeenTitles] = useState<string[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null); const [email, setEmail] = useState(''); const [accountNote, setAccountNote] = useState('');
+  const [pendingRoomAction, setPendingRoomAction] = useState<'create' | 'join' | null>(null);
   const t = copy[language];
   const queue = useMemo(() => titles.filter((item) => selectedCategories.includes(item.category) && selectedRegions.includes(item.region) && item.genre.some((genre) => selectedGenres.includes(genre)) && !seenTitles.includes(titleKey(item))), [selectedCategories, selectedRegions, selectedGenres, seenTitles]);
   const current = queue[0];
@@ -50,6 +51,10 @@ export default function Home() {
   useEffect(() => {
     const saved = window.localStorage.getItem('cine-match:seen-titles');
     if (saved) setSeenTitles(JSON.parse(saved));
+    const pending = window.localStorage.getItem('cine-match:pending-room-action');
+    if (pending === 'create' || pending === 'join') setPendingRoomAction(pending);
+    const pendingCode = window.localStorage.getItem('cine-match:pending-room-code');
+    if (pendingCode) setRoom(pendingCode);
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
@@ -62,6 +67,20 @@ export default function Home() {
       if (data) setSeenTitles((items) => [...new Set([...items, ...data.map((item) => item.title_id)])]);
     });
   }, [user, language]);
+  useEffect(() => {
+    if (!user || !pendingRoomAction) return;
+    window.localStorage.removeItem('cine-match:pending-room-action');
+    window.localStorage.removeItem('cine-match:pending-room-code');
+    setPendingRoomAction(null);
+    setAccountNote('You’re signed in. Setting up your room…');
+    if (pendingRoomAction === 'create') void createRoom();
+    else void joinRoom();
+  }, [user, pendingRoomAction]);
+  const rememberRoomAction = (action: 'create' | 'join') => {
+    window.localStorage.setItem('cine-match:pending-room-action', action);
+    if (action === 'join') window.localStorage.setItem('cine-match:pending-room-code', room.trim());
+    setPendingRoomAction(action);
+  };
   const createRoom = async () => {
     const newCode = `CINE-${Math.floor(1000 + Math.random() * 9000)}`;
     if (supabase && user) {
@@ -69,7 +88,7 @@ export default function Home() {
       if (error || !data) { setAccountNote(error?.message ?? 'Could not create the room. Please try again.'); return; }
       await supabase.from('room_members').insert({ room_id: data.id, user_id: user.id });
       setRoomId(data.id);
-    } else if (supabaseConfigured) { setAccountNote('Sign in in Settings to create a live room.'); setSettingsOpen(true); return; }
+    } else if (supabaseConfigured) { rememberRoomAction('create'); setAccountNote('Sign in once, then we’ll create your room automatically.'); setSettingsOpen(true); return; }
     setRoom(newCode); setRole('host'); setScreen('filters');
   };
   const joinRoom = async () => {
@@ -78,7 +97,7 @@ export default function Home() {
       const { data, error } = await supabase.rpc('join_room_by_code', { room_code: room });
       if (error || !data) { setAccountNote(error?.message ?? 'Room not found.'); return; }
       setRoomId(data);
-    } else if (supabaseConfigured) { setAccountNote('Sign in in Settings to join a live room.'); setSettingsOpen(true); return; }
+    } else if (supabaseConfigured) { rememberRoomAction('join'); setAccountNote('Sign in once, then we’ll join this room automatically.'); setSettingsOpen(true); return; }
     setRole('guest'); setScreen('filters');
   };
   const swipe = (action: 'liked' | 'disliked' | 'watched') => {
@@ -100,7 +119,7 @@ export default function Home() {
   };
 
   return <main className="mobile-app" lang={language}>
-    <header className="app-header"><div className="brand"><span>♥</span> cinematch</div>{screen === 'swipe' && <><button className="room-chip" onClick={invite}>⌁ {room}</button><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label={t.settings}>⚙</button></>}</header>
+    <header className="app-header"><div className="brand"><span>♥</span> cinematch</div>{screen === 'swipe' && <button className="room-chip" onClick={invite}>⌁ {room}</button>}<button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label={t.settings}>⚙</button></header>
     {screen === 'room' && <section className="onboarding"><div className="orb orb-one" /><div className="orb orb-two" /><p className="tiny-label">{t.room}</p><h1>{t.next}<br /><i>{t.room}</i></h1><p>{t.roomPrompt}</p><div className="room-actions"><button className="primary-button" onClick={createRoom}>✦ {t.create}</button><div className="join-box"><label>{t.join}</label><div><input value={room} placeholder={t.roomInput} onChange={(event) => setRoom(event.target.value.toUpperCase())} /><button onClick={joinRoom}>{t.continue} →</button></div></div></div><small>Mobile-first · Global picks · India streaming</small></section>}
     {screen === 'filters' && <section className="filters-screen"><div className="stepper"><span className="active" /> <span className="active" /> <span /></div><p className="tiny-label">{role === 'host' ? t.host : t.guest} · {room}</p><h1>{t.filters}</h1><p className="lead">{t.filtersSub}</p><FilterSection title={t.where}><div className="choice-row"><Choice active={selectedRegions.includes('Global')} label={t.global} onClick={() => toggle('Global', selectedRegions, setSelectedRegions)} /><Choice active={selectedRegions.includes('India')} label={t.india} onClick={() => toggle('India', selectedRegions, setSelectedRegions)} /></div></FilterSection><FilterSection title={t.category}><div className="choice-row">{(['Movies', 'Series', 'Anime'] as Category[]).map((category) => <Choice key={category} active={selectedCategories.includes(category)} label={language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[category]) : category} onClick={() => toggle(category, selectedCategories, setSelectedCategories)} />)}</div></FilterSection><FilterSection title={t.genres}><button className={`all-genres ${selectedGenres.length === allGenres.length ? 'active' : ''}`} onClick={setAllGenres}>{t.all}</button><div className="genre-grid">{allGenres.map((genre) => <button key={genre} className={selectedGenres.includes(genre) ? 'selected' : ''} onClick={() => toggle(genre, selectedGenres, setSelectedGenres, 0)}>{language === 'hi' ? genreHi[genre] : genre}</button>)}</div></FilterSection>{seenTitles.length > 0 && <p className="history-note">✓ {seenTitles.length} already seen, passed, or liked titles are excluded.</p>}<button className="primary-button wide" disabled={!queue.length} onClick={() => setScreen('swipe')}>♥ {t.start} <span>({queue.length})</span></button></section>}
     {screen === 'swipe' && (current ? <section className="swipe-screen"><div className="swipe-top"><div><p className="tiny-label">{current.region === 'India' ? t.india : t.global} · {language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[current.category]) : current.category}</p><h1>{current.title}</h1></div><div className="rating">★<strong>{current.rating}</strong><small>IMDb</small></div></div><article className="movie-card"><div className="cover" style={current.poster ? { backgroundImage: `linear-gradient(180deg, transparent 48%, rgba(0,0,0,.76)), url(${current.poster})` } : undefined}><div className="cover-fallback">{current.title}</div><div className="cover-bottom"><span>{current.year}</span><button onClick={() => setTrailerOpen(true)}>▶ {t.trailer}</button></div></div><div className="movie-details"><div className="genre-tags">{current.genre.map((genre) => <span key={genre}>{language === 'hi' ? genreHi[genre] : genre}</span>)}</div><p>{language === 'hi' ? current.descriptionHi : current.description}</p><div className="services"><small>{t.watch.toUpperCase()}</small>{current.services.map((service) => <b key={service}>{service}</b>)}</div></div></article><button className="watched-button" onClick={() => swipe('watched')}>◉ Already watched</button><div className="swipe-actions"><button className="pass" onClick={() => swipe('disliked')} aria-label={t.skip}>×</button><button className="heart" onClick={() => swipe('liked')} aria-label={t.like}>♥</button></div><p className="swipe-instruction">{t.skip} ← &nbsp;·&nbsp; {t.like} →</p>{liked.length > 0 && <div className="match-strip">♥ {liked.length} {language === 'hi' ? 'पसंद सेव हुई' : 'picks saved in this room'}</div>}</section> : <section className="empty-deck"><p className="tiny-label">Cine-Match</p><h1>You’re all caught up.</h1><p>Every title in this filter has already been seen, passed, or liked.</p><button className="primary-button" onClick={() => setScreen('filters')}>Change filters</button></section>)}
