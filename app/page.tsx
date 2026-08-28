@@ -1,6 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
+import { supabase, supabaseConfigured } from '../lib/supabase';
 
 type Category = 'Movies' | 'Series' | 'Anime';
 type Region = 'Global' | 'India';
@@ -22,6 +24,8 @@ const titles: Title[] = [
   { title: 'Pluto', year: 2023, genre: ['Sci-Fi', 'Mystery', 'Drama'], rating: 8.3, description: 'A sophisticated sci-fi mystery with gorgeous animation and questions that linger.', descriptionHi: 'खूबसूरत एनीमेशन और देर तक याद रहने वाले सवालों वाली शानदार साइ-फाइ मिस्ट्री।', services: ['Netflix India'], category: 'Anime', region: 'Global', trailer: '9ez8lm9I26Y' },
 ];
 
+const titleKey = (item: Title) => `${item.category}:${item.year}:${item.title.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`;
+
 const copy = {
   en: { create: 'Create a room', join: 'Join a room', code: 'Room code', continue: 'Continue', filters: 'Tune your movie night', filtersSub: 'Choose together before the first swipe.', where: 'What should we include?', category: 'Categories', genres: 'Genres', start: 'Start swiping', trailer: 'Watch trailer', watch: 'Watch in India', skip: 'Skip', like: 'Like', settings: 'Settings', language: 'App language', invite: 'Copy room invite', host: 'You created this room', guest: 'You joined this room', room: 'Watch together', all: 'All genres', global: 'Global', india: 'India', next: 'Your next great watch', roomPrompt: 'Start a room or join a friend.', roomInput: 'Enter a room code' },
   hi: { create: 'रूम बनाएं', join: 'रूम जॉइन करें', code: 'रूम कोड', continue: 'आगे बढ़ें', filters: 'अपनी मूवी नाइट चुनें', filtersSub: 'पहले स्वाइप से पहले साथ में पसंद चुनें।', where: 'क्या शामिल करें?', category: 'कैटेगरी', genres: 'जॉनर', start: 'स्वाइप शुरू करें', trailer: 'ट्रेलर देखें', watch: 'भारत में देखें', skip: 'स्किप', like: 'लाइक', settings: 'सेटिंग्स', language: 'ऐप भाषा', invite: 'रूम इनवाइट कॉपी करें', host: 'आपने यह रूम बनाया', guest: 'आप इस रूम में जुड़े हैं', room: 'साथ में देखें', all: 'सभी जॉनर', global: 'ग्लोबल', india: 'भारत', next: 'आपका अगला शानदार वॉच', roomPrompt: 'रूम बनाएं या दोस्त के रूम में जुड़ें।', roomInput: 'रूम कोड डालें' },
@@ -37,22 +41,75 @@ export default function Home() {
   const [selectedGenres, setSelectedGenres] = useState<string[]>(allGenres);
   const [index, setIndex] = useState(0); const [liked, setLiked] = useState<Title[]>([]);
   const [trailerOpen, setTrailerOpen] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null); const [seenTitles, setSeenTitles] = useState<string[]>([]);
+  const [roomId, setRoomId] = useState<string | null>(null); const [email, setEmail] = useState(''); const [accountNote, setAccountNote] = useState('');
   const t = copy[language];
-  const queue = useMemo(() => titles.filter((item) => selectedCategories.includes(item.category) && selectedRegions.includes(item.region) && item.genre.some((genre) => selectedGenres.includes(genre))), [selectedCategories, selectedRegions, selectedGenres]);
+  const queue = useMemo(() => titles.filter((item) => selectedCategories.includes(item.category) && selectedRegions.includes(item.region) && item.genre.some((genre) => selectedGenres.includes(genre)) && !seenTitles.includes(titleKey(item))), [selectedCategories, selectedRegions, selectedGenres, seenTitles]);
   const current = queue[index % Math.max(queue.length, 1)] || titles[0];
   const toggle = <T,>(value: T, values: T[], setValues: (next: T[]) => void, minimum = 1) => setValues(values.includes(value) ? values.length > minimum ? values.filter((entry) => entry !== value) : values : [...values, value]);
-  const createRoom = () => { setRoom(`CINE-${Math.floor(1000 + Math.random() * 9000)}`); setRole('host'); setScreen('filters'); };
-  const joinRoom = () => { if (room.trim()) { setRole('guest'); setScreen('filters'); } };
-  const swipe = (like: boolean) => { if (like) setLiked((items) => items.some((item) => item.title === current.title) ? items : [...items, current]); setIndex((value) => value + 1); };
+  useEffect(() => {
+    const saved = window.localStorage.getItem('cine-match:seen-titles');
+    if (saved) setSeenTitles(JSON.parse(saved));
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    if (!supabase || !user) return;
+    supabase.from('profiles').upsert({ id: user.id, display_name: user.user_metadata.full_name ?? null, locale: language });
+    supabase.from('title_actions').select('title_id').eq('user_id', user.id).then(({ data }) => {
+      if (data) setSeenTitles((items) => [...new Set([...items, ...data.map((item) => item.title_id)])]);
+    });
+  }, [user, language]);
+  const createRoom = async () => {
+    const newCode = `CINE-${Math.floor(1000 + Math.random() * 9000)}`;
+    if (supabase && user) {
+      const { data, error } = await supabase.from('rooms').insert({ code: newCode, created_by: user.id }).select('id').single();
+      if (error || !data) { setAccountNote(error?.message ?? 'Could not create the room. Please try again.'); return; }
+      await supabase.from('room_members').insert({ room_id: data.id, user_id: user.id });
+      setRoomId(data.id);
+    } else if (supabaseConfigured) { setAccountNote('Sign in in Settings to create a live room.'); setSettingsOpen(true); return; }
+    setRoom(newCode); setRole('host'); setScreen('filters');
+  };
+  const joinRoom = async () => {
+    if (!room.trim()) return;
+    if (supabase && user) {
+      const { data, error } = await supabase.rpc('join_room_by_code', { room_code: room });
+      if (error || !data) { setAccountNote(error?.message ?? 'Room not found.'); return; }
+      setRoomId(data);
+    } else if (supabaseConfigured) { setAccountNote('Sign in in Settings to join a live room.'); setSettingsOpen(true); return; }
+    setRole('guest'); setScreen('filters');
+  };
+  const swipe = (like: boolean) => {
+    const key = titleKey(current); const nextSeen = [...new Set([...seenTitles, key])];
+    setSeenTitles(nextSeen); window.localStorage.setItem('cine-match:seen-titles', JSON.stringify(nextSeen));
+    if (like) setLiked((items) => items.some((item) => item.title === current.title) ? items : [...items, current]);
+    if (supabase && user) {
+      supabase.from('title_actions').upsert({ user_id: user.id, title_id: key, action: like ? 'liked' : 'disliked' });
+      if (roomId) supabase.from('room_swipes').upsert({ room_id: roomId, user_id: user.id, title_id: key, decision: like ? 'liked' : 'disliked' });
+    }
+    setIndex((value) => value + 1);
+  };
   const invite = () => navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}?room=${room}`);
   const setAllGenres = () => setSelectedGenres(selectedGenres.length === allGenres.length ? [] : allGenres);
+  const startFacebook = async () => {
+    if (!supabase) { setAccountNote('Add the public Supabase key first.'); return; }
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'facebook', options: { redirectTo: window.location.origin } });
+    if (error) setAccountNote(error.message);
+  };
+  const sendMagicLink = async () => {
+    if (!supabase || !email) return;
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    setAccountNote(error ? error.message : 'Check your inbox for your secure sign-in link.');
+  };
 
   return <main className="mobile-app" lang={language}>
     <header className="app-header"><div className="brand"><span>♥</span> cinematch</div>{screen === 'swipe' && <><button className="room-chip" onClick={invite}>⌁ {room}</button><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label={t.settings}>⚙</button></>}</header>
     {screen === 'room' && <section className="onboarding"><div className="orb orb-one" /><div className="orb orb-two" /><p className="tiny-label">{t.room}</p><h1>{t.next}<br /><i>{t.room}</i></h1><p>{t.roomPrompt}</p><div className="room-actions"><button className="primary-button" onClick={createRoom}>✦ {t.create}</button><div className="join-box"><label>{t.join}</label><div><input value={room} placeholder={t.roomInput} onChange={(event) => setRoom(event.target.value.toUpperCase())} /><button onClick={joinRoom}>{t.continue} →</button></div></div></div><small>Mobile-first · Global picks · India streaming</small></section>}
     {screen === 'filters' && <section className="filters-screen"><div className="stepper"><span className="active" /> <span className="active" /> <span /></div><p className="tiny-label">{role === 'host' ? t.host : t.guest} · {room}</p><h1>{t.filters}</h1><p className="lead">{t.filtersSub}</p><FilterSection title={t.where}><div className="choice-row"><Choice active={selectedRegions.includes('Global')} label={t.global} onClick={() => toggle('Global', selectedRegions, setSelectedRegions)} /><Choice active={selectedRegions.includes('India')} label={t.india} onClick={() => toggle('India', selectedRegions, setSelectedRegions)} /></div></FilterSection><FilterSection title={t.category}><div className="choice-row">{(['Movies', 'Series', 'Anime'] as Category[]).map((category) => <Choice key={category} active={selectedCategories.includes(category)} label={language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[category]) : category} onClick={() => toggle(category, selectedCategories, setSelectedCategories)} />)}</div></FilterSection><FilterSection title={t.genres}><button className={`all-genres ${selectedGenres.length === allGenres.length ? 'active' : ''}`} onClick={setAllGenres}>{t.all}</button><div className="genre-grid">{allGenres.map((genre) => <button key={genre} className={selectedGenres.includes(genre) ? 'selected' : ''} onClick={() => toggle(genre, selectedGenres, setSelectedGenres, 0)}>{language === 'hi' ? genreHi[genre] : genre}</button>)}</div></FilterSection><button className="primary-button wide" disabled={!queue.length} onClick={() => { setIndex(0); setScreen('swipe'); }}>♥ {t.start} <span>({queue.length})</span></button></section>}
     {screen === 'swipe' && <section className="swipe-screen"><div className="swipe-top"><div><p className="tiny-label">{current.region === 'India' ? t.india : t.global} · {language === 'hi' ? ({ Movies: 'मूवीज़', Series: 'सीरीज़', Anime: 'एनीमे' }[current.category]) : current.category}</p><h1>{current.title}</h1></div><div className="rating">★<strong>{current.rating}</strong><small>IMDb</small></div></div><article className="movie-card"><div className="cover" style={current.poster ? { backgroundImage: `linear-gradient(180deg, transparent 48%, rgba(0,0,0,.76)), url(${current.poster})` } : undefined}><div className="cover-fallback">{current.title}</div><div className="cover-bottom"><span>{current.year}</span><button onClick={() => setTrailerOpen(true)}>▶ {t.trailer}</button></div></div><div className="movie-details"><div className="genre-tags">{current.genre.map((genre) => <span key={genre}>{language === 'hi' ? genreHi[genre] : genre}</span>)}</div><p>{language === 'hi' ? current.descriptionHi : current.description}</p><div className="services"><small>{t.watch.toUpperCase()}</small>{current.services.map((service) => <b key={service}>{service}</b>)}</div></div></article><div className="swipe-actions"><button className="pass" onClick={() => swipe(false)} aria-label={t.skip}>×</button><button className="heart" onClick={() => swipe(true)} aria-label={t.like}>♥</button></div><p className="swipe-instruction">{t.skip} ← &nbsp;·&nbsp; {t.like} →</p>{liked.length > 0 && <div className="match-strip">♥ {liked.length} {language === 'hi' ? 'पसंद सेव हुई' : 'picks saved in this room'}</div>}</section>}
-    {settingsOpen && <div className="sheet-backdrop" role="dialog" aria-modal="true"><section className="settings-sheet"><div className="handle" /><div className="sheet-title"><h2>{t.settings}</h2><button onClick={() => setSettingsOpen(false)}>×</button></div><p>{t.language}</p><div className="language-toggle"><button className={language === 'en' ? 'selected' : ''} onClick={() => setLanguage('en')}>English</button><button className={language === 'hi' ? 'selected' : ''} onClick={() => setLanguage('hi')}>हिन्दी</button></div><button className="invite-button" onClick={invite}>⌁ {t.invite}</button></section></div>}
+    {settingsOpen && <div className="sheet-backdrop" role="dialog" aria-modal="true"><section className="settings-sheet"><div className="handle" /><div className="sheet-title"><h2>{t.settings}</h2><button onClick={() => setSettingsOpen(false)}>×</button></div><p>{t.language}</p><div className="language-toggle"><button className={language === 'en' ? 'selected' : ''} onClick={() => setLanguage('en')}>English</button><button className={language === 'hi' ? 'selected' : ''} onClick={() => setLanguage('hi')}>हिन्दी</button></div><div className="account-panel"><p className="account-title">Your account</p>{user ? <><strong>{user.email ?? 'Signed in'}</strong><small>Likes, passes, and watched picks stay off your next deck.</small><button className="signout-button" onClick={() => supabase?.auth.signOut()}>Sign out</button></> : <>{supabaseConfigured ? <><small>Sign in to save your tastes and use live rooms with friends.</small><button className="facebook-button" onClick={startFacebook}>f&nbsp;&nbsp; Continue with Facebook</button><div className="email-login"><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /><button onClick={sendMagicLink}>Email link</button></div></> : <small>Account connection is being set up. Your swipes are saved privately on this device for now.</small>}</>}{accountNote && <small className="account-note">{accountNote}</small>}</div><button className="invite-button" onClick={invite}>⌁ {t.invite}</button></section></div>}
     {trailerOpen && <div className="trailer-backdrop" role="dialog" aria-modal="true"><section className="trailer-pane"><button className="close-trailer" onClick={() => setTrailerOpen(false)}>×</button><iframe src={`https://www.youtube-nocookie.com/embed/${current.trailer}?autoplay=1&rel=0`} title={`${current.title} trailer`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /></section></div>}
   </main>;
 }
